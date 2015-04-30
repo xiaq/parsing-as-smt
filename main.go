@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+)
 
 /*
 var ps1 = []production{
@@ -46,115 +49,136 @@ const benchmark = `(benchmark q.smt
 )
 `
 
-func putBenchmark(extrapreds, formulas string) string {
-	return fmt.Sprintf(benchmark, extrapreds, formulas)
+type generator struct {
+	g1, g2          *grammar
+	n               int
+	preds, formulas *bytes.Buffer
+	isTerminal      map[string]bool
 }
 
-func generateEquivalence(g1, g2 *grammar, n int) (extrapreds, formulas string) {
-	addExtrapred := func(s string, a ...interface{}) {
-		extrapreds += fmt.Sprintf(s, a...)
+func newGenerator(g1, g2 *grammar, n int) *generator {
+	g := &generator{
+		g1, g2, n,
+		new(bytes.Buffer), new(bytes.Buffer),
+		make(map[string]bool),
 	}
-	addFormula := func(s string, a ...interface{}) {
-		formulas += fmt.Sprintf(s, a...)
-	}
-
-	isTerminal := make(map[string]bool)
 	for t := range g1.isTerminal {
-		isTerminal[t] = true
+		g.isTerminal[t] = true
 	}
 	for t := range g2.isTerminal {
-		isTerminal[t] = true
+		g.isTerminal[t] = true
 	}
+	return g
+}
 
+func (g *generator) addPred(s string, a ...interface{}) {
+	fmt.Fprintf(g.preds, s, a...)
+}
+
+func (g *generator) addFormula(s string, a ...interface{}) {
+	fmt.Fprintf(g.formulas, s, a...)
+}
+
+func (g *generator) put() string {
+	return fmt.Sprintf(benchmark, g.preds.String(), g.formulas.String())
+}
+
+func (g *generator) generateIs() {
+	n := g.n
 	// Introduce the "is" family of variables
 	for i := 0; i < n; i++ {
-		for t := range isTerminal {
-			addExtrapred(" (is_%d_%s)", i, t)
+		for t := range g.isTerminal {
+			g.addPred(" (is_%d_%s)", i, t)
 		}
 	}
-	extrapreds += "\n"
+	g.addPred("\n")
 
 	// Encode that at most one of is_i_t for a fixed i is true
 	for i := 0; i < n; i++ {
-		for j := 0; j <= len(isTerminal); j++ {
-			addExtrapred(" (y_%d_%d)", i, j)
+		for j := 0; j <= len(g.isTerminal); j++ {
+			g.addPred(" (y_%d_%d)", i, j)
 		}
 		j := 0
-		for t := range isTerminal {
-			addFormula("(or (not is_%d_%s) (and (not y_%d_%d) y_%d_%d))\n",
+		for t := range g.isTerminal {
+			g.addFormula("(or (not is_%d_%s) (and (not y_%d_%d) y_%d_%d))\n",
 				i, t, i, j, i, j+1)
-			addFormula("(or (not y_%d_%d) y_%d_%d)\n", i, j, i, j+1)
+			g.addFormula("(or (not y_%d_%d) y_%d_%d)\n", i, j, i, j+1)
 			j++
 		}
 	}
 	// Encode that at least one of is_i_t for a fixed i is true
 	for i := 0; i < n; i++ {
-		addFormula("(or")
-		for t := range isTerminal {
-			addFormula(" is_%d_%s", i, t)
+		g.addFormula("(or")
+		for t := range g.isTerminal {
+			g.addFormula(" is_%d_%s", i, t)
 		}
-		addFormula(")\n")
+		g.addFormula(")\n")
 	}
+}
 
-	putParses := func(g *grammar, k int) {
-		for i := 0; i <= n; i++ {
-			for j := i + 1; j <= n; j++ {
-				for nt := range g.isNonterminal {
-					addExtrapred(" (parses%d_%d_%d_%s)", k, i, j, nt)
-					// Encode production rules
-					addFormula("(= parses%d_%d_%d_%s (or\n", k, i, j, nt)
-					anyProduction := false
-					for _, p := range g.productions {
-						if p.lhs != nt || j-i < len(p.rhs) {
-							continue
-						}
-						var f func(acc string, i int, rhs []string)
-						f = func(acc string, i int, rhs []string) {
-							if len(rhs) == 0 {
-								if i == j {
-									addFormula(acc + ")\n")
-								}
-								return
-							}
-							for i2 := i + 1; j-i2 >= len(rhs)-1; i2++ {
-								term := fmt.Sprintf(" parses%d_%d_%d_%s",
-									k, i, i2, rhs[0])
-								f(acc+term, i2, rhs[1:])
-							}
-						}
-						f("(and", i, p.rhs)
+func (g *generator) generateParses(gr *grammar, k int) {
+	n := g.n
+	for i := 0; i <= n; i++ {
+		for j := i + 1; j <= n; j++ {
+			for nt := range gr.isNonterminal {
+				g.addPred(" (parses%d_%d_%d_%s)", k, i, j, nt)
+				// Encode production rules
+				g.addFormula("(= parses%d_%d_%d_%s (or\n", k, i, j, nt)
+				anyProduction := false
+				for _, p := range gr.productions {
+					if p.lhs != nt || j-i < len(p.rhs) {
+						continue
 					}
-					if !anyProduction {
-						addFormula("false")
+					var f func(acc string, i int, rhs []string)
+					f = func(acc string, i int, rhs []string) {
+						if len(rhs) == 0 {
+							if i == j {
+								g.addFormula(acc + ")\n")
+							}
+							return
+						}
+						for i2 := i + 1; j-i2 >= len(rhs)-1; i2++ {
+							term := fmt.Sprintf(" parses%d_%d_%d_%s",
+								k, i, i2, rhs[0])
+							f(acc+term, i2, rhs[1:])
+						}
 					}
-					addFormula("))\n")
+					f("(and", i, p.rhs)
 				}
-				for t := range g.isTerminal {
-					addExtrapred(" (parses%d_%d_%d_%s)", k, i, j, t)
-					if j == i+1 {
-						addFormula("(= parses%d_%d_%d_%s is_%d_%s)\n",
-							k, i, j, t, i, t)
-					} else {
-						addFormula("(not parses%d_%d_%d_%s\n)", k, i, j, t)
-					}
+				if !anyProduction {
+					g.addFormula("false")
+				}
+				g.addFormula("))\n")
+			}
+			for t := range gr.isTerminal {
+				g.addPred(" (parses%d_%d_%d_%s)", k, i, j, t)
+				if j == i+1 {
+					g.addFormula("(= parses%d_%d_%d_%s is_%d_%s)\n",
+						k, i, j, t, i, t)
+				} else {
+					g.addFormula("(not parses%d_%d_%d_%s\n)", k, i, j, t)
 				}
 			}
 		}
-		addExtrapred("\n")
 	}
-	putParses(g1, 1)
-	putParses(g2, 2)
+	g.addPred("\n")
+}
+
+func (g *generator) generateEquivalence() {
+	g.generateIs()
+	g.generateParses(g.g1, 1)
+	g.generateParses(g.g2, 2)
 
 	// Encode that the input is in L(g1) but not in L(g2) or vice versa
-	addFormula("(xor parses1_%d_%d_%s parses2_%d_%d_%s)",
-		0, n, g1.start, 0, n, g2.start)
-	return
+	g.addFormula("(xor parses1_%d_%d_%s parses2_%d_%d_%s)",
+		0, g.n, g.g1.start, 0, g.n, g.g2.start)
 }
 
 func main() {
 	g1 := newGrammar(ps1, "E")
 	g2 := newGrammar(ps2, "E")
 	n := 19
-	bm := putBenchmark(generateEquivalence(g1, g2, n))
-	fmt.Print(bm)
+	g := newGenerator(g1, g2, n)
+	g.generateEquivalence()
+	fmt.Print(g.put())
 }
