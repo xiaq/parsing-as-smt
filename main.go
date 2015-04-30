@@ -164,14 +164,49 @@ func (g *generator) generateParses(gr *grammar, k int) {
 	g.addPred("\n")
 }
 
-func (g *generator) generateEquivalence() {
+func (g *generator) generate1() {
 	g.generateIs()
 	g.generateParses(g.g1, 1)
+}
+
+func (g *generator) generate12() {
+	g.generate1()
 	g.generateParses(g.g2, 2)
+}
+
+func (g *generator) generateInclusion() {
+	g.generate12()
+
+	// Encode that the input is in L(g1) but not in L(g2)
+	g.addFormula("(and parses1_%d_%d_%s (not parses2_%d_%d_%s))",
+		0, g.n, g.g1.start, 0, g.n, g.g2.start)
+	// If the solver yields unsat, inclusion is proved
+}
+
+func (g *generator) generateEquivalence() {
+	g.generate12()
 
 	// Encode that the input is in L(g1) but not in L(g2) or vice versa
 	g.addFormula("(xor parses1_%d_%d_%s parses2_%d_%d_%s)",
 		0, g.n, g.g1.start, 0, g.n, g.g2.start)
+	// If the solver yields unsat, equivalence is proved
+}
+
+func (g *generator) generateIntersection() {
+	g.generate12()
+
+	// Encode that the input is in L(g1) and in L(g2)
+	g.addFormula("(and parses1_%d_%d_%s parses2_%d_%d_%s)",
+		0, g.n, g.g1.start, 0, g.n, g.g2.start)
+	// If the solver yields a satisfying assignment, intersection is proved
+}
+
+func (g *generator) generateUniversality() {
+	g.generate1()
+
+	// Encode that the input is not in L(g1)
+	g.addFormula("(not parses1_%d_%d_%s)", 0, g.n, g.g1.start)
+	// If the solver yields unsat, universality is proved
 }
 
 func main() {
@@ -179,6 +214,7 @@ func main() {
 	g2 := newGrammar(ps2, "E")
 	n := 19
 	g := newGenerator(g1, g2, n)
-	g.generateEquivalence()
+	// g.generateEquivalence()
+	g.generateUniversality()
 	fmt.Print(g.put())
 }
