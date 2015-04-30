@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 
+/*
 var ps1 = []production{
 	{"E", []string{"a", "b"}},
 	{"E", []string{"a", "E", "b"}},
@@ -11,6 +12,25 @@ var ps2 = []production{
 	{"E", []string{"a", "F"}},
 	{"F", []string{"b"}},
 	{"F", []string{"a", "F", "b"}},
+}
+*/
+
+var ps1 = []production{
+	{"E", []string{"num"}},
+	{"E", []string{"E", "add", "E"}},
+	{"E", []string{"E", "sub", "E"}},
+	{"E", []string{"E", "mul", "E"}},
+	{"E", []string{"E", "div", "E"}},
+}
+
+var ps2 = []production{
+	{"E", []string{"E", "add", "M"}},
+	{"E", []string{"E", "sub", "M"}},
+	{"E", []string{"M"}},
+	{"M", []string{"M", "mul", "F"}},
+	{"M", []string{"M", "div", "F"}},
+	{"M", []string{"F"}},
+	{"F", []string{"num"}},
 }
 
 const benchmark = `(benchmark q.smt
@@ -134,7 +154,7 @@ func generateEquivalence(g1, g2 *grammar, n int) (extrapreds, formulas string) {
 func main() {
 	g1 := newGrammar(ps1, "E")
 	g2 := newGrammar(ps2, "E")
-	n := 20
+	n := 19
 	bm := putBenchmark(generateEquivalence(g1, g2, n))
 	fmt.Print(bm)
 }
