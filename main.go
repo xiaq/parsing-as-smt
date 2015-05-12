@@ -37,8 +37,12 @@ var ps2 = []production{
 }
 
 const benchmark = `(benchmark q.smt
-:logic QF_UF
+:logic QF_UFLIA
 :extrapreds
+(
+%s
+)
+:extrafuns
 (
 %s
 )
@@ -50,16 +54,18 @@ const benchmark = `(benchmark q.smt
 `
 
 type generator struct {
-	g1, g2          *grammar
-	n               int
-	preds, formulas *bytes.Buffer
-	isTerminal      map[string]bool
+	g1, g2     *grammar
+	n          int
+	preds      *bytes.Buffer
+	funs       *bytes.Buffer
+	formulas   *bytes.Buffer
+	isTerminal map[string]bool
 }
 
 func newGenerator(g1, g2 *grammar, n int) *generator {
 	g := &generator{
 		g1, g2, n,
-		new(bytes.Buffer), new(bytes.Buffer),
+		new(bytes.Buffer), new(bytes.Buffer), new(bytes.Buffer),
 		make(map[string]bool),
 	}
 	for t := range g1.isTerminal {
@@ -75,12 +81,17 @@ func (g *generator) addPred(s string, a ...interface{}) {
 	fmt.Fprintf(g.preds, s, a...)
 }
 
+func (g *generator) addFun(s string, a ...interface{}) {
+	fmt.Fprintf(g.funs, s, a...)
+}
+
 func (g *generator) addFormula(s string, a ...interface{}) {
 	fmt.Fprintf(g.formulas, s, a...)
 }
 
 func (g *generator) put() string {
-	return fmt.Sprintf(benchmark, g.preds.String(), g.formulas.String())
+	return fmt.Sprintf(benchmark,
+		g.preds.String(), g.funs.String(), g.formulas.String())
 }
 
 func (g *generator) generateIs() {
@@ -116,37 +127,39 @@ func (g *generator) generateIs() {
 	}
 }
 
-func (g *generator) generateParses(gr *grammar, k int) {
+func (g *generator) generateParsingClauses(gr *grammar, k int) {
 	n := g.n
 	for i := 0; i <= n; i++ {
-		for j := i + 1; j <= n; j++ {
+		for j := i; j <= n; j++ {
 			for nt := range gr.isNonterminal {
 				g.addPred(" (parses%d_%d_%d_%s)", k, i, j, nt)
+				size := fmt.Sprintf("size%d_%d_%d_%s", k, i, j, nt)
+				g.addFun(" (%s Int)", size)
 				// Encode production rules
-				g.addFormula("(= parses%d_%d_%d_%s (or\n", k, i, j, nt)
-				anyProduction := false
+				g.addFormula("(= parses%d_%d_%d_%s (or false\n", k, i, j, nt)
 				for _, p := range gr.productions {
-					if p.lhs != nt || j-i < len(p.rhs) {
+					if p.lhs != nt {
 						continue
 					}
-					var f func(acc string, i int, rhs []string)
-					f = func(acc string, i int, rhs []string) {
+					var f func(accp, accs string, i int, rhs []string)
+					f = func(accp, accs string, i int, rhs []string) {
 						if len(rhs) == 0 {
 							if i == j {
-								g.addFormula(acc + ")\n")
+								g.addFormula(accp + "\n")
+								g.addFormula(accs + ")))\n")
 							}
 							return
 						}
-						for i2 := i + 1; j-i2 >= len(rhs)-1; i2++ {
-							term := fmt.Sprintf(" parses%d_%d_%d_%s",
+						// for i2 := i + 1; j-i2 >= len(rhs)-1; i2++ {
+						for i2 := i; i2 <= j; i2++ {
+							termp := fmt.Sprintf(" parses%d_%d_%d_%s",
 								k, i, i2, rhs[0])
-							f(acc+term, i2, rhs[1:])
+							terms := fmt.Sprintf(" size%d_%d_%d_%s",
+								k, i, i2, rhs[0])
+							f(accp+termp, accs+terms, i2, rhs[1:])
 						}
 					}
-					f("(and", i, p.rhs)
-				}
-				if !anyProduction {
-					g.addFormula("false")
+					f("(and", "(= "+size+" (+ 1", i, p.rhs)
 				}
 				g.addFormula("))\n")
 			}
@@ -156,8 +169,10 @@ func (g *generator) generateParses(gr *grammar, k int) {
 					g.addFormula("(= parses%d_%d_%d_%s is_%d_%s)\n",
 						k, i, j, t, i, t)
 				} else {
-					g.addFormula("(not parses%d_%d_%d_%s\n)", k, i, j, t)
+					g.addFormula("(not parses%d_%d_%d_%s)\n", k, i, j, t)
 				}
+				g.addFun(" (size%d_%d_%d_%s Int)", k, i, j, t)
+				g.addFormula("(= size%d_%d_%d_%s 1)\n", k, i, j, t)
 			}
 		}
 	}
@@ -166,12 +181,12 @@ func (g *generator) generateParses(gr *grammar, k int) {
 
 func (g *generator) generate1() {
 	g.generateIs()
-	g.generateParses(g.g1, 1)
+	g.generateParsingClauses(g.g1, 1)
 }
 
 func (g *generator) generate12() {
 	g.generate1()
-	g.generateParses(g.g2, 2)
+	g.generateParsingClauses(g.g2, 2)
 }
 
 func (g *generator) generateInclusion() {
@@ -209,12 +224,23 @@ func (g *generator) generateUniversality() {
 	// If the solver yields unsat, universality is proved
 }
 
+func (g *generator) generateParsesWord(word []string) {
+	g.generate1()
+	for i, t := range word {
+		g.addFormula("is_%d_%s\n", i, t)
+	}
+	g.addFormula("parses1_%d_%d_%s", 0, g.n, g.g1.start)
+}
+
 func main() {
 	g1 := newGrammar(ps1, "E")
 	g2 := newGrammar(ps2, "E")
-	n := 19
+	word := []string{"num", "add", "num"}
+	// n := 19
+	n := len(word)
 	g := newGenerator(g1, g2, n)
 	// g.generateEquivalence()
-	g.generateUniversality()
+	// g.generateUniversality()
+	g.generateParsesWord(word)
 	fmt.Print(g.put())
 }
